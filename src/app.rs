@@ -1,24 +1,34 @@
-use std::{io, time::Duration};
+use std::io;
 
 use crossterm::event::{self, poll, Event, KeyCode, KeyEventKind};
 
 use crate::ui::ui;
 
+#[derive(PartialEq)]
 pub enum CurrentScreen {
     Home,
     Game,
-    Exiting,
+    Result,
 }
 
 pub struct App {
     pub input: String,
     pub next_sentence: usize,
-    pub point: i32,
+    pub point: usize,
     pub current_screen: CurrentScreen,
+    pub timer: std::time::Instant,
+    pub left_time: std::time::Duration,
 }
 
 impl App {
-    const SENTENCES: [&str; 3] = ["hello hira-typist", "こんにちは世界", "打倒寿司打"];
+    const SENTENCES: [&str; 6] = [
+        "hello hira-typist",
+        "こんにちは世界",
+        "打倒寿司打",
+        "とてもながいひらがなをうちたいな",
+        "このあぷりはえすけーけーとあいしょうがいい",
+        "もともとAZIK使ってたら寿司打ができなそうだなと思った",
+    ];
 
     pub fn new() -> Self {
         App {
@@ -26,6 +36,8 @@ impl App {
             next_sentence: 0,
             point: 0,
             current_screen: CurrentScreen::Home,
+            timer: std::time::Instant::now(),
+            left_time: std::time::Duration::from_secs(60),
         }
     }
 
@@ -36,10 +48,10 @@ impl App {
 
     fn check_input(&mut self) {
         if self.input == Self::SENTENCES[self.next_sentence] {
-            self.point += 1;
+            self.point += self.input.chars().count();
             self.change_sentence();
             self.input.clear();
-            while poll(Duration::from_secs(0)).unwrap() {
+            while poll(std::time::Duration::from_secs(0)).unwrap() {
                 let _ = event::read();
             }
         }
@@ -64,22 +76,39 @@ impl App {
         self.input.chars().take(index).collect()
     }
 
+    fn start_game(&mut self) {
+        self.current_screen = CurrentScreen::Game;
+        self.input.clear();
+        self.next_sentence = 0;
+        self.point = 0;
+        self.timer = std::time::Instant::now();
+    }
+
+    fn end_game(&mut self) {
+        self.current_screen = CurrentScreen::Result;
+        self.point += self.get_correct().chars().count();
+    }
+
     pub fn run(&mut self, terminal: &mut ratatui::DefaultTerminal) -> io::Result<()> {
         loop {
             terminal.draw(|frame| ui(frame, &self))?;
+            if self.current_screen == CurrentScreen::Game && self.left_time < self.timer.elapsed() {
+                self.end_game();
+            }
+            if !poll(std::time::Duration::from_secs(0)).unwrap() {
+                continue;
+            }
             if let Event::Key(key) = event::read()? {
+                if key.kind != KeyEventKind::Press {
+                    continue;
+                }
                 match self.current_screen {
                     CurrentScreen::Home => match key.code {
-                        KeyCode::Enter => {
-                            self.current_screen = CurrentScreen::Game;
-                        }
-                        KeyCode::Esc | KeyCode::Char('q') => {
-                            self.current_screen = CurrentScreen::Exiting;
-                            break;
-                        }
+                        KeyCode::Enter => self.start_game(),
+                        KeyCode::Esc | KeyCode::Char('q') => break,
                         _ => {}
                     },
-                    CurrentScreen::Game if key.kind == KeyEventKind::Press => match key.code {
+                    CurrentScreen::Game => match key.code {
                         KeyCode::Char(c) => {
                             self.input.push(c);
                             self.check_input();
@@ -87,12 +116,14 @@ impl App {
                         KeyCode::Backspace => {
                             self.input.pop();
                         }
-                        KeyCode::Esc => {
-                            self.current_screen = CurrentScreen::Home;
-                        }
+                        KeyCode::Esc => self.end_game(),
                         _ => {}
                     },
-                    _ => break,
+                    CurrentScreen::Result => match key.code {
+                        KeyCode::Enter => self.current_screen = CurrentScreen::Home,
+                        KeyCode::Esc | KeyCode::Char('q') => break,
+                        _ => {}
+                    },
                 };
             }
         }
